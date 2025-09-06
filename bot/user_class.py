@@ -22,7 +22,18 @@ class User:
         return self.user_id
     
     def get_or_create_default_playlist(self):
-        if not self.user_id:
-            raise RuntimeError("get_or_create_default_playlist called without user_id")
-        self.default_playlist_id = get_or_create_default_playlist(self.user_id)
+        column_name_list = ['user_id', 'youtube_link', 'title', 'full_duration', 'status']
+        playlist_id = run_query(
+            simple_insert('playlists', 5, column_name_list, 1, 1, ['user_id', 'youtube_link'], 'id'),
+            (self.user_id, "default_playlist", "playlist_for_single_videos", 0, 'await'),
+            fetchone=True
+            )
+        if not playlist_id:
+            playlist_id = run_query("""
+                SELECT id FROM playlists
+                WHERE user_id = %s AND youtube_link = %s
+                LIMIT 1;
+            """, (self.user_id, "default_playlist"), fetchone=True)
+
+        self.default_playlist_id = playlist_id[0] if playlist_id else None
         return self.default_playlist_id

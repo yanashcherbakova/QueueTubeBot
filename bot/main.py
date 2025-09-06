@@ -1,5 +1,6 @@
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from bot.utility import is_youtube_link
+from bot.playlist_service import PlaylistService
 from bot.user_class import User
 from bot.yt_parse import detect_youtube_type
 import os
@@ -37,6 +38,13 @@ async def start(update, context):
     
 
 async def ingest_link(update, context):
+    try:
+        Cur_user = User.validate_or_reload(context, update)
+    except Exception:
+        logger.exception("🔴 Failed to restore/init user in ingest_link")
+        await update.message.reply_text("🔴 Internal error. Please try again.")
+        return
+
     if not update.message or not update.message.text:
         logger.error("🔴 Not a link")
         await update.message.reply_text("Error: Not a link") 
@@ -51,9 +59,16 @@ async def ingest_link(update, context):
     obj_type = detect_youtube_type(text)
     try:
         if obj_type == "playlist":
-            ...
+            playlist_id = PlaylistService.add_playlist(Cur_user.user_id, text)
+            if playlist_id:
+                await update.message.reply_text("Playlist saved")
+            else:
+                await update.message.reply_text("Hi! This playlist already exists")
         elif obj_type == "video":
-            ...
+            if not Cur_user.default_playlist_id:
+                Cur_user.get_or_create_default_playlist()
+                PlaylistService.add_video(Cur_user.default_playlist_id, text)
+                await update.message.reply_text("Single video saved")
         else:
             logger.error("🔴 Type error: not a video / not a playlist")
             await update.message.reply_text("Type error: not a video / not a playlist")
@@ -61,12 +76,30 @@ async def ingest_link(update, context):
         logger.exception("🔴 Failed to ingest link")
         await update.message.reply_text("Internal error while saving link.")
             
+    
+async def show_playlists(update, context):
+    try:
+        Cur_user = User.validate_or_reload(context, update)
+    except Exception:
+        logger.exception("🔴 Failed to restore/init user in ingest_link")
+        await update.message.reply_text("🔴 Internal error. Please try again.")
+        return
+    
+    try:
+        text = Cur_user.render_playlists()
+    except Exception:
+        logger.exception("🔴 DB error in render_playlists")
+        await update.message.reply_text("🔴 Failed to fetch playlists.")
+        return
+    
+    await update.message.reply_text(text, disable_web_page_preview=True)
 
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("show_playlists", show_playlists))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ingest_link))
 
     app.run_polling()

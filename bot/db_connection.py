@@ -1,6 +1,13 @@
 import psycopg2
 import os
+import logging
 
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 def run_query(query, params=None, *, fetchone=False, fetchall=False):
     with psycopg2.connect(
@@ -14,10 +21,15 @@ def run_query(query, params=None, *, fetchone=False, fetchall=False):
             cur.execute(query, params)
             if cur.description:
                 if fetchone:
-                    return cur.fetchone()       # tuple | None
-                if fetchall:
-                    return cur.fetchall()       # list[tuple]
-            return None
+                    result = cur.fetchone()       # tuple | None
+                elif fetchall:
+                    result = cur.fetchall()      # list[tuple]
+                else:
+                    result = None
+            else:
+                result = None
+        logger.info("Query executed: %s | params=%s", query.strip().split("\n")[0], params)
+        return result
 
 
 def simple_insert(table_name, holders : int, column_name_list, conflict = 0, returning = 0, conflict_object = None , returning_object = None):
