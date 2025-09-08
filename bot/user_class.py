@@ -148,11 +148,24 @@ class User:
         total_sec = done_sec + await_sec
         done_percentage = (done_sec * 100) // total_sec if total_sec > 0 else 0
 
-        stat = ['User statistic:','\n', 
-                f"Playlist count: {playlists_count}", '\n', 
-                f"Videos done: {done_cnt}",
-                f"Videos await: {await_cnt}",'\n', 
-                f"Time watched: {done_str}", 
-                f"Time await {await_str}",'\n', 
-                f"Progress ---> {done_percentage}% done"]
+        if done_percentage == 100:
+            pic = '⬛⬛⬛⬛⬛⬛'
+        elif done_percentage >= 80:
+            pic = '⬛⬛⬛⬛⬛⬜'
+        elif done_percentage >= 60:
+            pic = '⬛⬛⬛⬛⬜⬜'
+        elif done_percentage >= 40:
+            pic = '⬛⬛⬛⬜⬜⬜'
+        elif done_percentage >= 20:
+            pic = '⬛⬛⬜⬜⬜⬜'
+        else:
+            pic = '⬛⬜⬜⬜⬜⬜'
+
+        stat = ['User statistic:','\n', '\n',  
+                f"Playlist count: {playlists_count[0] - 1}", '\n', 
+                f"Videos done: {done_cnt}", '\n',
+                f"Videos await: {await_cnt}",'\n', '\n', 
+                f"⏳ Time await {await_str}",'\n',
+                f"⌛ Time watched: {done_str}", '\n', '\n', 
+                f"Progress: {pic}({done_percentage}%)"]
         return "".join(stat)
