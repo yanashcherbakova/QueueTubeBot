@@ -49,8 +49,6 @@ class Playlist:
         return 1 if res else 0
     
     
-
-
     def set_last_sent(self):
         res = run_query("""
             UPDATE playlists p

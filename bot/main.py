@@ -1,7 +1,9 @@
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from bot.db_connection import mark_video_done
 from bot.utility import is_youtube_link
 from bot.playlist_service import PlaylistService
 from bot.user_class import User
+from bot.playlist_class import Playlist
 from bot.yt_parse import detect_youtube_type
 import os
 import logging
@@ -76,7 +78,43 @@ async def ingest_link(update, context):
         logger.exception("🔴 Failed to ingest link")
         await update.message.reply_text("Internal error while saving link.")
             
+
+async def send_videos(update, context):
+    try:
+        Cur_user = User.validate_or_reload(context, update)
+    except Exception:
+        logger.exception("🔴 Failed to restore/init user in ingest_link")
+        await update.message.reply_text("🔴 Internal error. Please try again.")
+        return
     
+    try:
+        playlist_id = int(context.args[0])
+    except:
+        playlist_id = Cur_user.get_random_playlist()
+
+    if not playlist_id:
+        await update.message.reply_text("No playlists with -- await -- status")
+        return
+    
+    Pl = Playlist(playlist_id, Cur_user.user_id)
+
+    video = Pl.find_next_video()    #{"id": video[0], "link": video[1]}
+    if not video:
+        await update.message.reply_text("Try again. No videos with -- await -- status in current playlist")
+        return
+    
+    await update.message.reply_text(video['link'])
+    
+    if mark_video_done(video['id'], playlist_id, Cur_user.user_id):
+        logger.info(f"Video {video['link']} has been marked as done")
+    if Pl.set_last_sent():
+        logger.info('Playlist info -- last sent -- changed to NOW')
+
+    if Pl.set_playlist_done():
+        await update.message.reply_text("Playlist has been marked as done!")
+        logger.info(f"Playlist has been marked as done")
+
+
 async def show_playlists(update, context):
     try:
         Cur_user = User.validate_or_reload(context, update)
@@ -99,6 +137,7 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("next", send_videos))
     app.add_handler(CommandHandler("show_playlists", show_playlists))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ingest_link))
 

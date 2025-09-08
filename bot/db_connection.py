@@ -30,8 +30,7 @@ def run_query(query, params=None, *, fetchone=False, fetchall=False):
                 result = None
         logger.info("Query executed: %s | params=%s", query.strip().split("\n")[0], params)
         return result
-
-
+    
 def simple_insert(table_name, holders : int, column_name_list, conflict = 0, returning = 0, conflict_object = None , returning_object = None):
     text =  f"""
             INSERT INTO {table_name} ({", ".join(column_name_list)})
@@ -44,22 +43,45 @@ def simple_insert(table_name, holders : int, column_name_list, conflict = 0, ret
 
     text += ';'
     return text
-   
 
-def get_or_create_default_playlist(user_id):
-    column_name_list = ['user_id', 'youtube_link', 'title', 'full_duration', 'status']
-    playlist_id = run_query(
-        simple_insert('playlists', 5, column_name_list, 1, 1, ['user_id', 'youtube_link'], 'id'),
-        (user_id, "default_playlist", "playlist_for_single_videos", 0, 'await'),
-        fetchone=True
-    )
-    if not playlist_id:
-        playlist_id = run_query("""
-            SELECT id FROM playlists
-            WHERE user_id = %s AND youtube_link = %s
-            LIMIT 1;
-        """, (user_id, "default_playlist"), fetchone=True)
-    return playlist_id[0] if playlist_id else None
+
+def mark_video_done(video_id, playlist_id, user_id):
+    res = run_query("""
+        UPDATE playlist_items AS pit
+            SET status = 'done',
+                completed_at = NOW()
+            WHERE pit.id = %s
+            AND pit.playlist_id = %s
+            AND EXISTS (
+                    SELECT 1
+                    FROM playlists p
+                    WHERE p.id = pit.playlist_id
+                    AND p.user_id = %s
+            )
+            RETURNING pit.id;
+""", (video_id, playlist_id, user_id), fetchone=True)
+    return bool(res)
+
+
+def resolve_playlist_arg(user_id, number):
+    if not number:
+        return None
+    
+    try:
+        num = int(number)
+    except ValueError:
+        return None
+    
+    row = run_query("""
+            WITH ordered AS (
+                SELECT p.id, ROW_NUMBER() OVER (ORDER BY p.id) AS num
+                FROM playlists p
+                WHERE p.user_id = %s
+                    AND p.youtube_link <> 'default_playlist'
+            )
+            SELECT id FROM ordered WHERE num = %s;
+        """, (user_id, num), fetchone=True)
+    return row[0] if row else None
 
 
 
