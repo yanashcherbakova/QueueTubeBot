@@ -41,6 +41,25 @@ class User:
         return self.default_playlist_id
     
 
+    @classmethod
+    def validate_or_reload(cls, context, update):
+        Cur_user = context.user_data.get("user")
+        if Cur_user:
+            return Cur_user
+
+        u = update.effective_user
+        Cur_user = cls(u.id, u.username)
+
+        res = run_query("SELECT id FROM users WHERE telegram_id = %s", (u.id,), fetchone=True)
+        if res:
+            Cur_user.user_id = res[0] if isinstance(res, (tuple, list)) else res
+        else:
+            Cur_user.save_to_db()
+
+        Cur_user.get_or_create_default_playlist()
+        context.user_data["user"] = Cur_user
+        return Cur_user
+
     def get_random_playlist(self):
         tuple_ids = run_query("""
             SELECT p.id
@@ -97,3 +116,43 @@ class User:
                 f"Watched: {minutes}min\n"
             )
         return "\n".join(lines)
+    
+
+    def get_user_stat(self):
+        playlists_count = run_query("""
+            SELECT count(p.id)
+                         FROM playlists p
+                         WHERE p.user_id = %s;""", (self.user_id,), fetchone = True)
+        
+        row = run_query("""
+            SELECT
+                COALESCE(SUM(CASE WHEN pit.status = 'done'  THEN 1 END), 0) AS done_cnt,
+                COALESCE(SUM(CASE WHEN pit.status = 'done'  THEN pit.duration_sec END), 0) AS done_sec,
+                COALESCE(SUM(CASE WHEN pit.status = 'await' THEN 1 END), 0) AS await_cnt,
+                COALESCE(SUM(CASE WHEN pit.status = 'await' THEN pit.duration_sec END), 0) AS await_sec
+            FROM playlists p
+            JOIN playlist_items pit ON pit.playlist_id = p.id
+            WHERE p.user_id = %s;
+        """, (self.user_id,), fetchone=True)
+
+        done_cnt, done_sec, await_cnt, await_sec = row if row else (0, 0, 0, 0)
+
+        def fmt_hm(total_sec: int) -> str:
+            mins = total_sec // 60
+            hrs = mins // 60
+            return f"{hrs} h {mins - hrs * 60} min"
+
+        done_str = fmt_hm(done_sec)
+        await_str = fmt_hm(await_sec)
+
+        total_sec = done_sec + await_sec
+        done_percentage = (done_sec * 100) // total_sec if total_sec > 0 else 0
+
+        stat = ['User statistic:','\n', 
+                f"Playlist count: {playlists_count}", '\n', 
+                f"Videos done: {done_cnt}",
+                f"Videos await: {await_cnt}",'\n', 
+                f"Time watched: {done_str}", 
+                f"Time await {await_str}",'\n', 
+                f"Progress ---> {done_percentage}% done"]
+        return "".join(stat)

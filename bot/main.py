@@ -133,12 +133,54 @@ async def show_playlists(update, context):
     await update.message.reply_text(text, disable_web_page_preview=True)
 
 
+async def delete_playlist_cmd(update, context):
+    try:
+        Cur_user = User.validate_or_reload(context, update)
+    except Exception:
+        logger.exception("🔴 Failed to restore/init user in ingest_link")
+        await update.message.reply_text("🔴 Internal error. Please try again.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Usage: /delete_playlist <playlist_id>")
+        return
+    
+    try:
+        playlist_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Playlist id must be an integer.")
+        return
+    
+    Pl = Playlist(playlist_id, Cur_user.user_id)
+    deleted = Pl.delete_playlist()
+    if deleted:
+        logger.info(f"Playlist {deleted['id']} '{deleted['title']}' deleted")
+        await update.message.reply_text(
+            f"Deleted:\n{deleted['id']} {deleted['title']}\n🔗 {deleted['youtube_link']}")
+    else:
+        logger.error('🔴 Failed to delete playlist')
+
+
+async def statistic(update, context):
+    try:
+        Cur_user = User.validate_or_reload(context, update)
+    except Exception:
+        logger.exception("🔴 Failed to restore/init user in ingest_link")
+        await update.message.reply_text("🔴 Internal error. Please try again.")
+        return
+    
+    user_stat = Cur_user.get_user_stat()
+    await update.message.reply_text(user_stat)
+    logger.info("User stat delivered")
+
+
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("next", send_videos))
     app.add_handler(CommandHandler("show_playlists", show_playlists))
+    app.add_handler(CommandHandler("delete_playlist", delete_playlist_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ingest_link))
 
     app.run_polling()
