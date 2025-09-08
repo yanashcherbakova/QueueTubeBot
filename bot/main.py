@@ -1,3 +1,4 @@
+from telegram import BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from bot.db_connection import mark_video_done
 from bot.utility import is_youtube_link
@@ -66,6 +67,7 @@ async def ingest_link(update, context):
                 await update.message.reply_text("Playlist saved")
             else:
                 await update.message.reply_text("Hi! This playlist already exists")
+
         elif obj_type == "video":
             if not Cur_user.default_playlist_id:
                 Cur_user.get_or_create_default_playlist()
@@ -161,6 +163,39 @@ async def delete_playlist_cmd(update, context):
         logger.error('🔴 Failed to delete playlist')
 
 
+async def restart_playlist(update, context):
+    try:
+        Cur_user = User.validate_or_reload(context, update)
+    except Exception:
+        logger.exception("🔴 Failed to restore/init user in ingest_link")
+        await update.message.reply_text("🔴 Internal error. Please try again.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Usage: /restart_playlist <playlist_id>")
+        return
+    
+    try:
+        playlist_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Playlist id must be a positive integer.")
+        return
+    
+    Pl = Playlist(playlist_id, Cur_user.user_id)
+
+    try:
+        result = Pl.restart()
+    except Exception:
+        logger.exception("🔴 DB error in restart_pldb")
+        await update.message.reply_text("🔴 Internal error while restarting playlist.")
+        return
+    
+    if result:
+        await update.message.reply_text(result["msg"])
+    else:
+        await update.message.reply_text("🔴 Unexpected error. Please try again.")
+
+
 async def statistic(update, context):
     try:
         Cur_user = User.validate_or_reload(context, update)
@@ -173,6 +208,13 @@ async def statistic(update, context):
     await update.message.reply_text(user_stat)
     logger.info("User stat delivered")
 
+
+COMMANDS = [
+    BotCommand("start", "to start"),
+    BotCommand("show_playlists", "show existed playlists"),
+    BotCommand("next", "use playlist id or get random"),
+    BotCommand("delete_playlist", "use playlist id to delete"),
+]
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
