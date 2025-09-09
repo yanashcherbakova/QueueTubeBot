@@ -49,3 +49,23 @@ class PlaylistService:
                                     SET full_duration = COALESCE(full_duration, 0) + %s
                                     WHERE p.id = %s;
             """, (dur, playlist_id))
+        
+        return db_data["title"]
+    
+    @staticmethod
+    def set_playlist_await(playlist_id, user_id):
+        res = run_query("""
+            UPDATE playlists p
+            SET status = 'await',
+                completed_at = NULL
+            WHERE p.id = %s
+                AND p.user_id = %s
+                AND EXISTS (
+                    SELECT 1
+                    FROM playlist_items pit
+                    WHERE pit.playlist_id = p.id
+                    AND pit.status = 'await'
+                    )
+            RETURNING p.id;
+            """, (playlist_id, user_id), fetchone=True)
+        return 1 if res else 0

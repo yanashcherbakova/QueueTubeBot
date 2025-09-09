@@ -1,6 +1,6 @@
 from telegram import BotCommand
 from telegram.constants import ParseMode
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder,  ApplicationHandlerStop, CommandHandler, MessageHandler, filters
 from bot.db_connection import mark_video_done, resolve_playlist_arg
 from bot.utility import is_youtube_link, YOUTUBE_URL_RE
 from bot.playlist_service import PlaylistService
@@ -147,67 +147,172 @@ async def show_playlists(update, context):
         logger.exception("🔴 DB error in render_playlists")
         await update.message.reply_text("🔴 Failed to fetch playlists.")
         return
-    
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
-async def delete_playlist_cmd(update, context):
+@require_user
+async def cancel_any(update, context):
+    msg = None
+    if context.user_data.pop(AWAITING_DELETE_KEY, None):
+        msg = "Deletion cancelled."
+    if context.user_data.pop(AWAITING_RESTART_KEY, None):
+        msg = "Restart cancelled."
+    await update.message.reply_text(msg or "Nothing to cancel.")
+    raise ApplicationHandlerStop  
+
+AWAITING_DELETE_KEY = "awaiting_delete"
+
+
+@require_user
+async def starting_deletion(update, context):
+    Cur_user = context.user_data["user"]
+
     try:
-        Cur_user = User.validate_or_reload(context, update)
+        text = Cur_user.render_playlists()
     except Exception:
-        logger.exception("🔴 Failed to restore/init user in ingest_link")
-        await update.message.reply_text("🔴 Internal error. Please try again.")
+        logger.exception("🔴 DB error in render_playlists")
+        await update.message.reply_text("🔴 Failed to fetch playlists.")
         return
     
-    if not context.args:
-        await update.message.reply_text("Usage: /delete_playlist <playlist_id>")
+    context.user_data[AWAITING_DELETE_KEY] = True
+    intruction_msg = "🗑️ To delete playlist send the number\n✋🏻 To cancel command send /cancel\n"
+
+    await update.message.reply_text(intruction_msg + text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+
+@require_user
+async def get_deletion_info(update, context):
+
+    if not context.user_data.get(AWAITING_DELETE_KEY):
         return
+
+    Cur_user = context.user_data["user"]
+    user_answer = (update.message.text or "").strip()
+
+    if user_answer.lower() == "/cancel":
+        context.user_data.pop(AWAITING_DELETE_KEY, None)
+        await update.message.reply_text("Deletion cancelled.")
+        raise ApplicationHandlerStop
     
     try:
-        playlist_id = int(context.args[0])
+        playlist_position = int(user_answer)
     except ValueError:
-        await update.message.reply_text("Playlist id must be an integer.")
+        await update.message.reply_text("Please send a NUMBER of the playlist or /cancel.")
         return
+
+    await delete_playlist_cmd(update, context, playlist_position)
+    context.user_data.pop(AWAITING_DELETE_KEY, None)
+    raise ApplicationHandlerStop
+
+
+@require_user
+async def delete_playlist_cmd(update, context, playlist_position = None):
+    Cur_user = context.user_data["user"]
     
-    Pl = Playlist(playlist_id, Cur_user.user_id)
-    deleted = Pl.delete_playlist()
+    try:
+        playlist_id = resolve_playlist_arg(Cur_user.user_id, playlist_position)
+    except Exception:
+        logger.exception("🔴 resolve_playlist_arg failed")
+        await update.message.reply_text("🔴 Internal error. Try again later.")
+        return
+
+    if not playlist_id:
+        await update.message.reply_text("No playlist found by that number.")
+        return
+
+    try:
+        Pl = Playlist(playlist_id, Cur_user.user_id)
+        deleted = Pl.delete_playlist()
+    except Exception:
+        logger.exception("🔴 Failed to delete playlist")
+        await update.message.reply_text("🔴 Failed to delete the playlist.")
+        return
+
     if deleted:
         logger.info(f"Playlist {deleted['id']} '{deleted['title']}' deleted")
         await update.message.reply_text(
-            f"Deleted:\n{deleted['id']} {deleted['title']}\n🔗 {deleted['youtube_link']}")
+            f'Deleted:\n{deleted["id"]} {html.escape(deleted["title"])}\n'
+            f'🔗 <a href="{html.escape(deleted["youtube_link"], quote=True)}">link</a>',
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True
+            )
     else:
-        logger.error('🔴 Failed to delete playlist')
+        await update.message.reply_text("Nothing to delete (already removed?).")
+
+AWAITING_RESTART_KEY = "awaiting_restart"
 
 
-async def restart_playlist(update, context):
+@require_user
+async def starting_restart(update, context):
+    Cur_user = context.user_data["user"]
+
+    context.user_data.pop(AWAITING_DELETE_KEY, None)
+    context.user_data[AWAITING_RESTART_KEY] = True
+
     try:
-        Cur_user = User.validate_or_reload(context, update)
+        text = Cur_user.render_playlists()
     except Exception:
-        logger.exception("🔴 Failed to restore/init user in ingest_link")
-        await update.message.reply_text("🔴 Internal error. Please try again.")
+        logger.exception("🔴 DB error in render_playlists")
+        await update.message.reply_text("🔴 Failed to fetch playlists.")
         return
     
-    if not context.args:
-        await update.message.reply_text("Usage: /restart_playlist <playlist_id>")
+    intruction_msg = "🔄 To restart playlist send the number\n✋🏻 To cancel command send /cancel\n"
+    await update.message.reply_text(intruction_msg + text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+
+@require_user
+async def get_restarting_info(update, context):
+
+    if not context.user_data.get(AWAITING_RESTART_KEY):
         return
+
+    Cur_user = context.user_data["user"]
+    user_answer = (update.message.text or "").strip()
+    logger.info("restart_flow answer: %r", user_answer)
+
+    if user_answer.lower() == "/cancel":
+        context.user_data.pop(AWAITING_RESTART_KEY, None)
+        await update.message.reply_text("Restart cancelled.")
+        raise ApplicationHandlerStop
     
     try:
-        playlist_id = int(context.args[0])
+        playlist_position = int(user_answer)
     except ValueError:
-        await update.message.reply_text("Playlist id must be a positive integer.")
+        await update.message.reply_text("Please send a NUMBER of the playlist or /cancel.")
         return
     
-    Pl = Playlist(playlist_id, Cur_user.user_id)
+    await restart_playlist(update, context, playlist_position)
+    context.user_data.pop(AWAITING_RESTART_KEY, None)
+    raise ApplicationHandlerStop
+
+
+@require_user
+async def restart_playlist(update, context, playlist_position = None):
+    Cur_user = context.user_data["user"]
+    logger.info("restart_playlist CALLED, pos=%r", playlist_position)
 
     try:
-        result = Pl.restart()
+        playlist_id = resolve_playlist_arg(Cur_user.user_id, playlist_position)
+        logger.info("resolved position %s -> playlist_id %r", playlist_position, playlist_id)
     except Exception:
-        logger.exception("🔴 DB error in restart_pldb")
+        logger.exception("🔴 resolve_playlist_arg failed")
+        await update.message.reply_text("🔴 Internal error. Try again later.")
+        return
+
+    if not playlist_id:
+        await update.message.reply_text("No playlist found by that number.")
+        return
+    
+    try:
+        Pl = Playlist(playlist_id, Cur_user.user_id)
+        restarted = Pl.restart()
+    except Exception:
+        logger.exception("🔴 DB error in restart_playlist")
         await update.message.reply_text("🔴 Internal error while restarting playlist.")
         return
-    
-    if result:
-        await update.message.reply_text(result["msg"])
+
+    if restarted:
+        await update.message.reply_text(restarted["msg"])
     else:
         await update.message.reply_text("🔴 Unexpected error. Please try again.")
 
@@ -244,16 +349,37 @@ COMMANDS = [
     BotCommand("help", "Show available commands"),
 ]
 
+async def _post_init(app):
+    await app.bot.set_my_commands(COMMANDS)
+
+
+awaiting_restart_filter = (
+    filters.TEXT
+    & ~filters.COMMAND
+    & filters.Create(lambda update, context: bool(context.user_data.get(AWAITING_RESTART_KEY)))
+)
+
+awaiting_delete_filter = (
+    filters.TEXT
+    & ~filters.COMMAND
+    & filters.Create(lambda update, context: bool(context.user_data.get(AWAITING_DELETE_KEY)))
+)
 
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(_post_init).build()
+
+    app.add_handler(MessageHandler(filters.Regex(YOUTUBE_URL_RE), ingest_link), group=0)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("next", send_videos))
     app.add_handler(CommandHandler("show_playlists", show_playlists))
-    app.add_handler(CommandHandler("delete_playlist", delete_playlist_cmd))
+    app.add_handler(CommandHandler("cancel", cancel_any))
+    app.add_handler(CommandHandler("delete_playlist", starting_deletion))
+    app.add_handler(CommandHandler("restart", starting_restart))
     app.add_handler(CommandHandler("stat", statistic))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ingest_link))
 
+    app.add_handler(MessageHandler(awaiting_restart_filter, get_restarting_info), group=1)
+    app.add_handler(MessageHandler(awaiting_delete_filter,  get_deletion_info),   group=1)
+    
     app.run_polling()
